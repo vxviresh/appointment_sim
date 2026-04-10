@@ -90,7 +90,9 @@ The key design choice is paired comparison: the exact same synthetic demand samp
 Volume fluctuation is a core part of the model. The simulator should support at least:
 
 - **Normal load**: baseline demand level
-- **Peak load**: default `1.8x` normal demand, configurable
+- **Peak load**: supports two modes:
+  - **Flat**: uniform `1.8x` multiplier across all days (simple, backward-compatible)
+  - **Clustered** (default): places multi-day surge windows (e.g., 2-4 consecutive days at `2.5x`) within the horizon, with non-surge days at a lower base (e.g., `1.2x`). This models real peak dynamics where consecutive heavy days create cascading pushout pressure that a flat multiplier understates.
 
 ## Output Shape
 

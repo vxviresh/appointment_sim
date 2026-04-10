@@ -57,6 +57,19 @@ These control volume conditions. They are configurable and should be passed sepa
   - default `1.0`
 - `peak_load_multiplier`
   - default `1.8`
+  - used only when `peak_surge_model = "flat"`
+- `peak_surge_model`
+  - `"flat"` or `"clustered"` (default `"clustered"`)
+  - `"flat"`: every peak day uses `peak_load_multiplier` uniformly (original behavior)
+  - `"clustered"`: places multi-day surge windows within the simulation horizon to model realistic peak dynamics where consecutive heavy days exhaust pushout windows
+- `peak_base_multiplier`
+  - multiplier applied to non-surge days during a clustered peak scenario (default `1.2`)
+- `peak_surge_multiplier`
+  - multiplier applied during surge windows (default `2.5`)
+- `surge_count`
+  - number of surge windows to place in the simulation horizon (default `2`)
+- `surge_length_range`
+  - `[min_days, max_days]` for each surge window length (default `[2, 4]`)
 - optional future scenarios may be added later, but v1 only requires normal and peak
 
 ### Policy inputs
@@ -78,6 +91,7 @@ These are the variables being tested.
 - `max_search_days` defines when a merchant effectively fails to get an acceptable appointment
 - `no_show_rate` allows comparison of booked operational stress versus actual-arrival operational stress
 - load multipliers change total demand and represent normal versus peak booking volume
+- `peak_surge_model` and associated parameters control whether peak demand is uniform across days or concentrated in multi-day surge windows; clustered surges stress the pushout mechanism more realistically by creating consecutive days where demand exceeds capacity, exhausting the `max_search_days` window
 
 ## Entities
 
@@ -136,13 +150,24 @@ Fields:
 
 For each run and scenario:
 
-1. For each simulated day, generate truck request volume using:
-   - `Poisson(base_rate * day_of_week_multiplier * load_multiplier)`
-2. For each request, generate:
+1. Compute per-day load multipliers:
+   - **Normal scenario** or **`peak_surge_model = "flat"`**: use `load_multiplier` for every day (uniform across the horizon)
+   - **`peak_surge_model = "clustered"`**: generate a per-day multiplier array:
+     1. Initialize all days to `peak_base_multiplier`
+     2. For each of `surge_count` surge windows:
+        - sample a length from `uniform_int(surge_length_range[0], surge_length_range[1])`
+        - sample a start day from `uniform_int(0, num_days - length)`
+        - set days `[start, start + length)` to `peak_surge_multiplier`
+        - surges may overlap; overlapping days stay at `peak_surge_multiplier`
+     3. The resulting array is the per-day multiplier sequence
+   - The per-day multiplier array must be generated from the run's RNG seed before any policy simulation begins; the same array is used for baseline and all candidate policies in that run
+2. For each simulated day `d`, generate truck request volume using:
+   - `Poisson(base_rate * day_of_week_multiplier[d] * daily_multiplier[d])`
+3. For each request, generate:
    - `cartons` from a configurable distribution
    - `desired_date`
    - `booking_day = desired_date - sampled_lead`, clamped to the simulation horizon
-3. Use the same generated requests for every policy in that run.
+4. Use the same generated requests for every policy in that run.
 
 ### Baseline booking rule
 
@@ -316,7 +341,7 @@ For each scenario:
 - slot order is deterministic
 - booking is first-come-first-served based on `booking_day`
 - desired-date behavior is synthetic for now but designed to be replaced with real data-derived assumptions later
-- peak demand is higher booking volume, default `1.8x`, and configurable
+- peak demand is higher booking volume, default `1.8x`, and configurable; clustered surge mode places multi-day high-demand windows rather than applying a flat multiplier, which better models real-world peak dynamics where consecutive heavy days create cascading pushout pressure
 
 ## Non-goals
 
