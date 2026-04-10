@@ -1,54 +1,111 @@
-# Appointment Booking Simulation
+# Appointment Booking Policy Simulation
 
-A Monte Carlo simulation comparing two warehouse appointment booking systems to understand the trade-off between operational protection and merchant experience.
+This repository defines a Monte Carlo simulation for one decision:
 
-## The Problem
+`If a site adds a daily carton cap and raises slot capacity, how much operational protection does it gain and what happens to merchant booking outcomes?`
 
-Warehouse sites book inbound truck appointments by the hour. Today, the only constraint is **max trucks per slot** (e.g., 2 trucks/hour). This controls congestion at the dock but does nothing to control workload — if all trucks happen to be large, a site rated for 5,000 cartons/day can easily receive 15,000+ cartons with no system-level guardrail.
+The simulator is intentionally directional in v1. It uses configurable synthetic demand and booking behavior now, but is structured so real site data can replace those assumptions later.
 
-## The Proposed Change
+See [`simulate_v2.md`](simulate_v2.md) for the implementation-ready spec.
 
-Add a second constraint: a **daily carton cap**. A truck's booking is rejected if its carton count would push the site over the daily limit, even if a slot has truck capacity available.
+## Problem
 
-Two constraints must now both pass for a booking to succeed:
-1. The target slot has remaining truck capacity
-2. The day's running carton total + this truck's cartons ≤ daily carton cap
+Today the site books inbound appointments using only a slot constraint:
 
-## What We're Simulating
+- each time slot has a maximum number of trucks
+- a truck consumes exactly 1 unit of slot capacity in a slot
+- the system does not directly limit total cartons booked for a day
 
-| | BEFORE | AFTER |
-|--|--------|-------|
-| Slot constraint | max trucks/slot | max trucks/slot |
-| Carton constraint | none | daily carton cap |
+That means a day can look safe on truck count while still blowing past the site's operational carton plan if too many large trucks book on the same day.
 
-The question: **what does the carton cap cost merchants, and how much does it protect operations?**
+## Policy Being Tested
 
-When a truck can't get its desired date, it gets pushed to the next available day (up to 7 days out). If nothing is available in that window, the truck gives up — lost demand.
+The simulation compares:
 
-## Metrics
+- **Baseline**
+  - current `max_trucks_per_slot`
+  - no daily carton cap
 
-**Operational experience**
-- % of days where actual cartons received exceeds the daily plan (BEFORE is bad here)
-- Daily carton utilization distribution
+- **Candidate policies**
+  - higher `max_trucks_per_slot`
+  - configurable `daily_carton_cap`
 
-**Merchant experience**
-- Average push-out days — how far merchants get bumped from their desired delivery date
-- % of trucks that can't find any appointment in 7 days (lost demand)
+This is not just a binary before/after model. The simulator should sweep multiple slot increases against one or more carton-cap values to find the tradeoff surface.
 
-## Scenarios
+## What the Simulation Measures
 
-- **Normal** — demand roughly matches capacity
-- **Peak** — demand at ~1.8x capacity
-- **Ramp** — demand grows from 0.5x to 2x over 30 days (shows when push-out starts hurting)
-- **Demand sweep** — steps from 0.5x to 2.5x capacity to find the exact inflection point where each system breaks down
+### Metric 1: Operational protection
+- `% of days over carton limit`
+- tracked for both booked cartons and actual-arrival cartons
 
-## Simulation Details
+### Metric 2: Merchant booking outcome
+- `% of merchants booked within 5 days of desired date`
+- formula: `booked_date - desired_date <= 5`
 
-- Monte Carlo: 500 runs × 30 simulated days per scenario
-- Truck arrivals: Poisson-distributed daily with day-of-week weights
-- Carton sizes: configurable Normal distribution, clipped to [500, 10,000]
-- Booking behavior: trucks try to book 1–7 days before their desired arrival date
-- No-show rate: ~12% (slot is wasted, cartons are released)
-- Booking is first-come-first-served
+### Metric 3: Merchant improvement vs baseline
+- `% of merchants booked earlier than baseline`
+- formula: `booked_date_candidate < booked_date_baseline`
+- this matters because higher slot capacity may help smaller loads get in earlier even with a carton cap
 
-See [`simulate.md`](simulate.md) for the full design spec and implementation plan.
+### Supporting metrics
+- `% of merchants pushed more than 5 days`
+- `% of merchants with no appointment found within the search window`
+- mean, median, and p95 push-out days
+
+## How the Simulation Works
+
+For each Monte Carlo run:
+
+1. Generate truck demand for each day.
+2. Assign cartons to each truck.
+3. Assign each truck a desired appointment date and booking attempt timing.
+4. Run the same demand through:
+   - baseline policy
+   - each candidate policy
+5. Compare outcomes at the truck/request level and aggregate metrics across runs.
+
+The key design choice is paired comparison: the exact same synthetic demand sample is replayed through every policy being compared.
+
+## Key Inputs
+
+### Static inputs
+- `slots_per_day`
+- `baseline_max_trucks_per_slot`
+- `day_of_week_multipliers`
+- carton-size distribution parameters
+- booking lead / desired-date assumptions
+- no-show rate
+- simulation horizon
+- number of Monte Carlo runs
+- search horizon beyond desired date
+
+### Policy inputs
+- `candidate_max_trucks_per_slot`
+- `daily_carton_cap`
+
+### Demand scenario inputs
+- `normal_load_multiplier`
+- `peak_load_multiplier`
+
+Volume fluctuation is a core part of the model. The simulator should support at least:
+
+- **Normal load**: baseline demand level
+- **Peak load**: default `1.8x` normal demand, configurable
+
+## Output Shape
+
+For each scenario and policy, the model should produce:
+
+- one summary row per policy
+- baseline deltas
+- merchant outcome distributions
+- operational protection distributions
+- a policy frontier showing how much slot capacity must increase to offset merchant harm under a given carton cap
+
+## Important Notes
+
+- v1 should not hardcode what "acceptable" means
+- the model should show tradeoff curves first, then humans can decide what is acceptable
+- desired-date behavior is synthetic and must remain configurable so real data can replace it later
+- single-site only in v1
+- carton count is the operational proxy for now
